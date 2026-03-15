@@ -12,12 +12,7 @@
 
 ## Demo
 
-<!-- ============================================================
-     YouTubeにアップロード後、以下の2箇所を書き換えてください:
-     1. YOUR_YOUTUBE_VIDEO_ID  → 例: dQw4w9WgXcQ
-     2. YOUR_YOUTUBE_VIDEO_ID  → 同じID
-     ============================================================ -->
-[![Demo Video](https://img.youtube.com/vi/YOUR_YOUTUBE_VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=YOUR_YOUTUBE_VIDEO_ID)
+[![Demo Video](https://img.youtube.com/vi/KuUZduU_6Fc/maxresdefault.jpg)](https://youtube.com/shorts/KuUZduU_6Fc)
 
 *Click the image to watch the demo on YouTube.*
 
