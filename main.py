@@ -5,9 +5,10 @@ import cv2
 import mediapipe as mp
 import time
 import os
-import pygame 
-from collections import deque 
+import pygame
+from collections import deque
 from datetime import datetime
+from PIL import ImageFont, ImageDraw, Image
 
 # --- 設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -138,6 +139,42 @@ AA_TEXTS = {
 "               CHOKI"
     )
 }
+
+# --- フォント設定 ---
+FONT_PATH = "C:/Windows/Fonts/meiryo.ttc"
+
+# --- 日本語テキスト描画 ---
+def put_text_jp(img, text, pos, font_size, color):
+    """OpenCV画像にPillowで日本語テキストを描画する"""
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+    try:
+        font = ImageFont.truetype(FONT_PATH, font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    draw.text(pos, text, font=font, fill=(color[2], color[1], color[0]))  # RGB順
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+def draw_start_screen(img):
+    """待機中のスタート画面を描画する"""
+    h, w = img.shape[:2]
+
+    # 半透明の黄色パネル
+    overlay = img.copy()
+    panel_w, panel_h = 520, 200
+    px = (w - panel_w) // 2
+    py = (h - panel_h) // 2
+    cv2.rectangle(overlay, (px, py), (px + panel_w, py + panel_h), (255, 200, 50), -1)
+    cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+
+    # パネルの枠線
+    cv2.rectangle(img, (px, py), (px + panel_w, py + panel_h), (255, 255, 100), 4)
+
+    # テキスト
+    img = put_text_jp(img, "ボタンをおして", (px + 80, py + 25), 52, (30, 30, 30))
+    img = put_text_jp(img, "スタート！", (px + 110, py + 105), 52, (180, 30, 30))
+
+    return img
 
 # --- LSTMモデル ---
 class HandGestureLSTM(nn.Module):
@@ -371,8 +408,11 @@ def main():
 
 
         # 5. ステータス表示
-        cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
-        cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        if status == "Press SPACE":
+            display = draw_start_screen(display)
+        else:
+            cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
+            cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         cv2.imshow('Janken', display)
 
