@@ -5,7 +5,9 @@ import cv2
 import mediapipe as mp
 import time
 import os
-import pygame 
+import sys
+import pygame
+from PIL import ImageFont, ImageDraw, Image
 from collections import deque 
 from datetime import datetime
 
@@ -138,6 +140,45 @@ AA_TEXTS = {
 "               CHOKI"
     )
 }
+
+# --- フォント設定 (OS別) ---
+if sys.platform == 'win32':
+    FONT_PATH = "C:/Windows/Fonts/meiryo.ttc"
+else:
+    FONT_PATH = "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
+
+# --- スタート画面描画 ---
+def draw_start_screen(img):
+    h, w = img.shape[:2]
+    panel_w, panel_h = 660, 220
+    px = (w - panel_w) // 2
+    py = (h - panel_h) // 2
+
+    overlay = img.copy()
+    cv2.rectangle(overlay, (px, py), (px + panel_w, py + panel_h), (50, 180, 80), -1)
+    cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+    cv2.rectangle(img, (px, py), (px + panel_w, py + panel_h), (100, 255, 130), 4)
+
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+    try:
+        font1 = ImageFont.truetype(FONT_PATH, 50)
+        font2 = ImageFont.truetype(FONT_PATH, 42)
+    except Exception:
+        font1 = font2 = ImageFont.load_default()
+
+    text1 = "手の線がでたら準備OK！"
+    text2 = "ボタンをおしてスタート！"
+
+    bb1 = draw.textbbox((0, 0), text1, font=font1)
+    tx1 = px + (panel_w - (bb1[2] - bb1[0])) // 2
+    bb2 = draw.textbbox((0, 0), text2, font=font2)
+    tx2 = px + (panel_w - (bb2[2] - bb2[0])) // 2
+
+    draw.text((tx1, py + 18), text1, font=font1, fill=(255, 255, 255))
+    draw.text((tx2, py + 125), text2, font=font2, fill=(255, 255, 0))
+
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 # --- LSTMモデル ---
 class HandGestureLSTM(nn.Module):
@@ -371,8 +412,11 @@ def main():
 
 
         # 5. ステータス表示
-        cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
-        cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        if status == "Press SPACE":
+            display = draw_start_screen(display)
+        else:
+            cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
+            cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         cv2.imshow('Janken', display)
 
