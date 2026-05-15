@@ -246,8 +246,19 @@ def save_feedback_data(sequence_np, correct_label):
     np.save(save_path, sequence_np)
     print(f"学習データを保存しました: {save_path}")
 
+# --- スリープ抑制 ---
+def prevent_sleep():
+    import ctypes
+    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000002)
+
+def release_sleep():
+    import ctypes
+    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+
 # --- メイン処理 ---
 def main():
+    prevent_sleep()
+
     # デバイス・モデル準備
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
     print(f"Device: {device}")
@@ -431,6 +442,7 @@ def main():
         cv2.imshow('Janken', display)
 
     # 終了処理
+    release_sleep()
     cap.release()
     cv2.destroyAllWindows()
     if sound: pygame.mixer.quit()
