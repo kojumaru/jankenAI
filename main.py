@@ -4,7 +4,9 @@ import numpy as np
 import cv2
 import mediapipe as mp
 import time
+import threading
 import os
+import sys
 import pygame
 from collections import deque
 from datetime import datetime
@@ -140,8 +142,11 @@ AA_TEXTS = {
     )
 }
 
-# --- フォント設定 ---
-FONT_PATH = "C:/Windows/Fonts/meiryo.ttc"
+# --- フォント設定 (OS別) ---
+if sys.platform == 'win32':
+    FONT_PATH = "C:/Windows/Fonts/meiryo.ttc"
+else:  # macOS
+    FONT_PATH = "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"
 
 # --- 日本語テキスト描画 ---
 def put_text_jp(img, text, pos, font_size, color):
@@ -159,22 +164,37 @@ def draw_start_screen(img):
     """待機中のスタート画面を描画する"""
     h, w = img.shape[:2]
 
-    # 半透明の黄色パネル
+    # 半透明の緑パネル
     overlay = img.copy()
-    panel_w, panel_h = 520, 200
+    panel_w, panel_h = 660, 220
     px = (w - panel_w) // 2
     py = (h - panel_h) // 2
-    cv2.rectangle(overlay, (px, py), (px + panel_w, py + panel_h), (255, 200, 50), -1)
+    cv2.rectangle(overlay, (px, py), (px + panel_w, py + panel_h), (50, 180, 80), -1)
     cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
+    cv2.rectangle(img, (px, py), (px + panel_w, py + panel_h), (100, 255, 130), 4)
 
-    # パネルの枠線
-    cv2.rectangle(img, (px, py), (px + panel_w, py + panel_h), (255, 255, 100), 4)
+    # PIL で中央揃えテキスト描画
+    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(img_pil)
+    try:
+        font1 = ImageFont.truetype(FONT_PATH, 50)
+        font2 = ImageFont.truetype(FONT_PATH, 42)
+    except Exception:
+        font1 = font2 = ImageFont.load_default()
 
-    # テキスト
-    img = put_text_jp(img, "ボタンをおして", (px + 80, py + 25), 52, (30, 30, 30))
-    img = put_text_jp(img, "スタート！", (px + 110, py + 105), 52, (180, 30, 30))
+    text1 = "カメラに手をうつし、"
+    text2 = "ボタンをおしてスタート！"
 
-    return img
+    # 文字幅を計算して中央揃え
+    bb1 = draw.textbbox((0, 0), text1, font=font1)
+    tx1 = px + (panel_w - (bb1[2] - bb1[0])) // 2
+    bb2 = draw.textbbox((0, 0), text2, font=font2)
+    tx2 = px + (panel_w - (bb2[2] - bb2[0])) // 2
+
+    draw.text((tx1, py + 18), text1, font=font1, fill=(255, 255, 255))
+    draw.text((tx2, py + 125), text2, font=font2, fill=(255, 255, 0))
+
+    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
 # --- LSTMモデル ---
 class HandGestureLSTM(nn.Module):
@@ -242,10 +262,100 @@ def save_feedback_data(sequence_np, correct_label):
     np.save(save_path, sequence_np)
     print(f"学習データを保存しました: {save_path}")
 
+# --- 画面解像度取得 ---
+def get_screen_size():
+    if sys.platform == 'win32':
+        import ctypes
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    else:  # macOS
+        import subprocess
+        out = subprocess.check_output(
+            ['osascript', '-e', 'tell application "Finder" to get bounds of window of desktop'],
+            text=True
+        ).strip()
+        parts = out.split(', ')
+        return int(parts[2]), int(parts[3])
+
+# --- 手の選択 ---
+def select_best_hand(multi_hand_landmarks):
+    """中央に近く、大きい手を優先して選択する"""
+    best = None
+    best_score = -1
+    for hand_lm in multi_hand_landmarks:
+        xs = [lm.x for lm in hand_lm.landmark]
+        ys = [lm.y for lm in hand_lm.landmark]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+        dist = ((cx - 0.5) ** 2 + (cy - 0.5) ** 2) ** 0.5
+        size = ((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2) ** 0.5
+        score = size - dist
+        if score > best_score:
+            best_score = score
+            best = hand_lm
+    return best
+
+# --- MediaPipeワーカースレッド ---
+def camera_worker(cap, hands, state):
+    """別スレッドでカメラ読み取り＋MediaPipe処理を行う"""
+    while state['running']:
+        ret, frame = cap.read()
+        if not ret:
+            state['running'] = False
+            break
+        frame = cv2.flip(frame, 1)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        results = hands.process(rgb)
+
+        landmarks = np.zeros(INPUT_SIZE)
+        hand_lm = None
+        if results.multi_hand_landmarks:
+            lh = select_best_hand(results.multi_hand_landmarks)
+            hand_lm = lh
+            lm_list = []
+            for lm in lh.landmark:
+                lm_list.extend([lm.x, lm.y, lm.z])
+            landmarks = np.array(lm_list)
+
+        with state['lock']:
+            state['frame'] = frame
+            state['landmarks'] = landmarks
+            state['hand_lm'] = hand_lm
+
+# --- スリープ抑制 ---
+def prevent_sleep():
+    """アプリ実行中にディスプレイがスリープしないようにする（管理者権限不要）"""
+    if sys.platform == 'win32':
+        import ctypes
+        ES_CONTINUOUS        = 0x80000000
+        ES_DISPLAY_REQUIRED  = 0x00000002
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_DISPLAY_REQUIRED
+        )
+        return None  # Windowsはプロセス終了時に自動解除される
+    else:  # macOS
+        import subprocess
+        proc = subprocess.Popen(['caffeinate', '-d'])
+        return proc
+
+def release_sleep(proc):
+    """スリープ抑制を解除する"""
+    if sys.platform == 'win32':
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    elif proc is not None:
+        proc.terminate()
+
 # --- メイン処理 ---
 def main():
+    # スリープ抑制開始
+    sleep_proc = prevent_sleep()
+
     # デバイス・モデル準備
-    device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    # mpsはLSTMでクラッシュするバグがあるためCPUにフォールバック
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     model = HandGestureLSTM(INPUT_SIZE).to(device)
@@ -266,7 +376,7 @@ def main():
 
     # MediaPipe準備
     mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, model_complexity=1)
+    hands = mp_hands.Hands(max_num_hands=2, min_detection_confidence=0.7, model_complexity=1)
     mp_drawing = mp.solutions.drawing_utils
 
     # 音声準備
@@ -277,8 +387,11 @@ def main():
     except Exception as e:
         print(f"Audio load error: {e}"); sound = None
 
-    # カメラ準備
-    cap = cv2.VideoCapture(0)
+    # カメラ準備 (WindowsはDirectShow指定で起動高速化)
+    if sys.platform == 'win32':
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    else:
+        cap = cv2.VideoCapture(0)
     if not cap.isOpened(): print("Camera error"); return
     
     # カメラ設定 (30fps固定)
@@ -288,6 +401,22 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # カメラワーカースレッド起動
+    cam_state = {
+        'lock': threading.Lock(),
+        'frame': None,
+        'landmarks': np.zeros(INPUT_SIZE),
+        'hand_lm': None,
+        'running': True,
+    }
+    worker = threading.Thread(target=camera_worker, args=(cap, hands, cam_state), daemon=True)
+    worker.start()
+    print("Camera worker started.")
+
+    # 画面解像度取得
+    screen_w, screen_h = get_screen_size()
+    print(f"Screen: {screen_w}x{screen_h}")
 
     # AA画像生成
     print("Generating AA images...")
@@ -306,7 +435,17 @@ def main():
     result_img = None
 
     last_processed_seq = None
-    
+    result_show_time = 0
+    RESULT_DISPLAY_SEC = 2.0
+
+    # 全画面ウィンドウ設定
+    cv2.namedWindow('Janken', cv2.WINDOW_NORMAL)
+    if sys.platform == 'win32':
+        cv2.setWindowProperty('Janken', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    else:  # macOSはWND_PROP_FULLSCREENがクラッシュするためresizeWindowで代替
+        cv2.resizeWindow('Janken', screen_w, screen_h)
+        cv2.moveWindow('Janken', 0, 0)
+
     print("Ready.")
     print("Controls:")
     print("  [SPACE]: ゲーム開始")
@@ -317,34 +456,33 @@ def main():
     print("  [q]: Quit")
 
     # ループ
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret: break
-        
-        frame = cv2.flip(frame, 1)
+    while cam_state['running']:
+        # ワーカースレッドから最新フレーム・ランドマークを取得
+        with cam_state['lock']:
+            frame = cam_state['frame']
+            landmarks = cam_state['landmarks'].copy()
+            hand_lm = cam_state['hand_lm']
+
+        if frame is None:
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                cam_state['running'] = False
+            continue
+
         display = frame.copy()
         curr_time = time.time()
 
-        # 1. MediaPipe処理
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb.flags.writeable = False
-        results = hands.process(rgb)
-        
-        landmarks = np.zeros(INPUT_SIZE)
-        if results.multi_hand_landmarks:
-            lh = results.multi_hand_landmarks[0]
-            lm_list = []
-            for lm in lh.landmark: lm_list.extend([lm.x, lm.y, lm.z])
-            landmarks = np.array(lm_list)
-            if not showing_result:
-                mp_drawing.draw_landmarks(display, lh, mp_hands.HAND_CONNECTIONS)
-        
+        # 手の骨格描画（メインスレッドで実施）
+        if hand_lm is not None and not showing_result:
+            mp_drawing.draw_landmarks(display, hand_lm, mp_hands.HAND_CONNECTIONS)
+
         buffer.append(landmarks)
 
         # 2. キー入力
         key = cv2.waitKey(1) & 0xFF
         
-        if key == ord('q'): break
+        if key == ord('q'):
+            cam_state['running'] = False
+            break
         
         # ゲーム開始 (フィードバック待ちでなければ)
         elif key == ord(' ') and not is_capturing and not waiting_for_feedback:
@@ -355,25 +493,24 @@ def main():
             
         # ★★★ フィードバック入力処理 ★★★
         elif waiting_for_feedback:
-            if key == ord(' '): # 正解
-                status = "Correct! Next..."
+            if key == ord(' '): # スキップ → スタート画面へ
                 waiting_for_feedback = False
                 showing_result = False
-                # (必要なら正解データも保存可能)
-            
+                status = "Press SPACE"
+
             elif key in [ord('v'), ord('b'), ord('n')]: # 訂正
                 correct_label = ''
                 if key == ord('v'): correct_label = 'gu'
                 if key == ord('b'): correct_label = 'ch'
                 if key == ord('n'): correct_label = 'pa'
-                
+
                 # データを保存
                 if last_processed_seq is not None:
                     save_feedback_data(last_processed_seq, correct_label)
-                    status = f"Saved as {correct_label}!"
-                
+
                 waiting_for_feedback = False
                 showing_result = False
+                status = "Press SPACE"
 
         # 3. ゲームロジック
         if is_capturing:
@@ -397,9 +534,16 @@ def main():
                 result_img = win_images.get(label, np.zeros((actual_h, actual_w, 3), dtype=np.uint8))
                 showing_result = True
                 waiting_for_feedback = True # ★ フィードバック待ちへ移行 ★
-                
+                result_show_time = curr_time
+
                 is_capturing = False
                 status = "Was I correct? (space/v/b/n)"
+
+        # 4. 結果自動リセット (4秒後にスタート画面へ)
+        if showing_result and (curr_time - result_show_time >= RESULT_DISPLAY_SEC):
+            waiting_for_feedback = False
+            showing_result = False
+            status = "Press SPACE"
 
         # 4. 結果描画
         if showing_result:
@@ -414,9 +558,13 @@ def main():
             cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
             cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
+        display = cv2.resize(display, (screen_w, screen_h))
         cv2.imshow('Janken', display)
 
     # 終了処理
+    cam_state['running'] = False
+    worker.join(timeout=2.0)
+    release_sleep(sleep_proc)
     cap.release()
     cv2.destroyAllWindows()
     if sound: pygame.mixer.quit()
