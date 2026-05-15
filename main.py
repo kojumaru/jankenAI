@@ -180,43 +180,6 @@ def draw_start_screen(img):
 
     return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
 
-def draw_capturing_screen(img, elapsed):
-    """じゃんけん中の画面を描画する"""
-    h, w = img.shape[:2]
-    panel_w, panel_h = 660, 220
-    px = (w - panel_w) // 2
-    py = (h - panel_h) // 2
-
-    overlay = img.copy()
-    cv2.rectangle(overlay, (px, py), (px + panel_w, py + panel_h), (50, 180, 80), -1)
-    cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
-    cv2.rectangle(img, (px, py), (px + panel_w, py + panel_h), (100, 255, 130), 4)
-
-    img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(img_pil)
-    try:
-        font1 = ImageFont.truetype(FONT_PATH, 64)
-        font2 = ImageFont.truetype(FONT_PATH, 44)
-    except Exception:
-        font1 = font2 = ImageFont.load_default()
-
-    if elapsed < 2.0:
-        text1, text2 = "じゃんけん…", "手をだしてね！"
-        color1, color2 = (255, 255, 255), (255, 255, 0)
-    else:
-        text1, text2 = "ぽん！", "てをみせて！"
-        color1, color2 = (255, 255, 0), (255, 255, 255)
-
-    bb1 = draw.textbbox((0, 0), text1, font=font1)
-    tx1 = px + (panel_w - (bb1[2] - bb1[0])) // 2
-    bb2 = draw.textbbox((0, 0), text2, font=font2)
-    tx2 = px + (panel_w - (bb2[2] - bb2[0])) // 2
-
-    draw.text((tx1, py + 15), text1, font=font1, fill=color1)
-    draw.text((tx2, py + 130), text2, font=font2, fill=color2)
-
-    return cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
-
 # --- LSTMモデル ---
 class HandGestureLSTM(nn.Module):
     def __init__(self, input_size, hidden_size=32, num_layers=1, num_classes=3):
@@ -407,24 +370,23 @@ def main():
         # ★★★ フィードバック入力処理 ★★★
         elif waiting_for_feedback:
             if key == ord(' '): # 正解
-                status = "Correct! Next..."
                 waiting_for_feedback = False
                 showing_result = False
-                # (必要なら正解データも保存可能)
-            
+                status = "Press SPACE"
+
             elif key in [ord('v'), ord('b'), ord('n')]: # 訂正
                 correct_label = ''
                 if key == ord('v'): correct_label = 'gu'
                 if key == ord('b'): correct_label = 'ch'
                 if key == ord('n'): correct_label = 'pa'
-                
+
                 # データを保存
                 if last_processed_seq is not None:
                     save_feedback_data(last_processed_seq, correct_label)
-                    status = f"Saved as {correct_label}!"
-                
+
                 waiting_for_feedback = False
                 showing_result = False
+                status = "Press SPACE"
 
         # 3. ゲームロジック
         if is_capturing:
@@ -461,8 +423,6 @@ def main():
         # 5. ステータス表示
         if status == "Press SPACE":
             display = draw_start_screen(display)
-        elif is_capturing:
-            display = draw_capturing_screen(display, curr_time - start_time)
         else:
             cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
             cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
