@@ -248,16 +248,39 @@ def save_feedback_data(sequence_np, correct_label):
 
 # --- スリープ抑制 ---
 def prevent_sleep():
-    import ctypes
-    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000002)
+    if sys.platform == 'win32':
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000002)
+        return None
+    else:
+        import subprocess
+        return subprocess.Popen(['caffeinate', '-d'])
 
-def release_sleep():
-    import ctypes
-    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+def release_sleep(proc):
+    if sys.platform == 'win32':
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+    elif proc is not None:
+        proc.terminate()
+
+# --- 画面解像度取得 ---
+def get_screen_size():
+    if sys.platform == 'win32':
+        import ctypes
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    else:
+        import subprocess
+        out = subprocess.check_output(
+            ['osascript', '-e', 'tell application "Finder" to get bounds of window of desktop'],
+            text=True
+        ).strip()
+        parts = out.split(', ')
+        return int(parts[2]), int(parts[3])
 
 # --- メイン処理 ---
 def main():
-    prevent_sleep()
+    sleep_proc = prevent_sleep()
 
     # デバイス・モデル準備
     device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
@@ -305,14 +328,15 @@ def main():
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     # 画面解像度取得
-    import ctypes
-    user32 = ctypes.windll.user32
-    screen_w = user32.GetSystemMetrics(0)
-    screen_h = user32.GetSystemMetrics(1)
+    screen_w, screen_h = get_screen_size()
 
     # 全画面ウィンドウ設定
     cv2.namedWindow('Janken', cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty('Janken', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    if sys.platform == 'win32':
+        cv2.setWindowProperty('Janken', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    else:
+        cv2.resizeWindow('Janken', screen_w, screen_h)
+        cv2.moveWindow('Janken', 0, 0)
 
     # AA画像生成
     print("Generating AA images...")
@@ -331,6 +355,8 @@ def main():
     result_img = None
 
     last_processed_seq = None
+    result_show_time = 0
+    RESULT_TIMEOUT = 7.0
     
     print("Ready.")
     print("Controls:")
@@ -421,9 +447,16 @@ def main():
                 result_img = win_images.get(label, np.zeros((actual_h, actual_w, 3), dtype=np.uint8))
                 showing_result = True
                 waiting_for_feedback = True # ★ フィードバック待ちへ移行 ★
+                result_show_time = curr_time
                 
                 is_capturing = False
                 status = "Was I correct? (space/v/b/n)"
+
+        # 4. 結果自動リセット (7秒後にスタート画面へ)
+        if showing_result and (curr_time - result_show_time >= RESULT_TIMEOUT):
+            waiting_for_feedback = False
+            showing_result = False
+            status = "Press SPACE"
 
         # 4. 結果描画
         if showing_result:
@@ -442,7 +475,7 @@ def main():
         cv2.imshow('Janken', display)
 
     # 終了処理
-    release_sleep()
+    release_sleep(sleep_proc)
     cap.release()
     cv2.destroyAllWindows()
     if sound: pygame.mixer.quit()
