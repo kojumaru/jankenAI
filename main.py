@@ -293,6 +293,16 @@ def main():
     actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+    # 画面解像度取得
+    import ctypes
+    user32 = ctypes.windll.user32
+    screen_w = user32.GetSystemMetrics(0)
+    screen_h = user32.GetSystemMetrics(1)
+
+    # 全画面ウィンドウ設定
+    cv2.namedWindow('Janken', cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty('Janken', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
     # AA画像生成
     print("Generating AA images...")
     win_images = {k: create_aa_image(v, actual_w, actual_h) for k, v in AA_TEXTS.items()}
@@ -418,6 +428,7 @@ def main():
             cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (63, 192, 0), 2)
             cv2.putText(display, f"Your Hand: {prediction}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
+        display = cv2.resize(display, (screen_w, screen_h))
         cv2.imshow('Janken', display)
 
     # 終了処理
