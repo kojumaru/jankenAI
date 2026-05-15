@@ -281,8 +281,8 @@ def main():
     except Exception as e:
         print(f"Audio load error: {e}"); sound = None
 
-    # カメラ準備
-    cap = cv2.VideoCapture(0)
+    # カメラ準備 (WindowsはDirectShow指定で起動高速化)
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW) if sys.platform == 'win32' else cv2.VideoCapture(0)
     if not cap.isOpened(): print("Camera error"); return
     
     # カメラ設定 (30fps固定)
